@@ -38,10 +38,37 @@ def load_rubric():
             return f.read()
     return "Ejes de evaluación estándar de redes neuronales."
 
+def get_available_gemini_models(api_key: str) -> list:
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+    req = urllib.request.Request(url, method='GET')
+    try:
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            models = []
+            for m in data.get('models', []):
+                name = m.get('name', '')
+                methods = m.get('supportedGenerationMethods', [])
+                if 'generateContent' in methods:
+                    # Extraer solo el nombre (ej. gemini-2.5-flash desde models/gemini-2.5-flash)
+                    clean_name = name.replace('models/', '')
+                    models.append(clean_name)
+            print(f"Modelos disponibles encontrados en la API: {models}")
+            return models
+    except Exception as e:
+        print(f"No se pudo consultar ListModels: {str(e)}", file=sys.stderr)
+        return ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash-latest", "gemini-flash-latest"]
+
 def call_gemini_api(api_key: str, content_to_review: str, rubric: str) -> str:
-    # Modelos candidatos a probar en orden de preferencia
-    models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash", "gemini-1.5-pro"]
+    available_models = get_available_gemini_models(api_key)
     
+    # Priorizar modelos tipo 'flash' por velocidad y economía
+    priority_models = [m for m in available_models if 'flash' in m.lower()]
+    other_models = [m for m in available_models if m not in priority_models]
+    target_models = priority_models + other_models
+
+    if not target_models:
+        target_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash-latest"]
+
     prompt_user = f"""
  RÚBRICA Y CONTEXTO DEL CURSO:
 {rubric}
@@ -66,12 +93,12 @@ Por favor genera la evaluación detallada según las instrucciones del sistema.
     data = json.dumps(payload).encode('utf-8')
     
     last_error = ""
-    for model in models:
+    for model in target_models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
         req = urllib.request.Request(url, data=data, headers=headers, method='POST')
         
         try:
-            print(f"Probando modelo {model}...")
+            print(f"Intentando generar contenido con modelo: {model}...")
             with urllib.request.urlopen(req) as response:
                 res_body = response.read().decode('utf-8')
                 res_json = json.loads(res_body)
@@ -79,6 +106,7 @@ Por favor genera la evaluación detallada según las instrucciones del sistema.
                 if candidates:
                     parts = candidates[0].get('content', {}).get('parts', [])
                     if parts:
+                        print(f"¡Éxito obtenido con el modelo {model}!")
                         return parts[0].get('text', '')
         except urllib.error.HTTPError as e:
             err_body = e.read().decode('utf-8', errors='ignore')

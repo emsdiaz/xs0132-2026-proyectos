@@ -39,8 +39,8 @@ def load_rubric():
     return "Ejes de evaluación estándar de redes neuronales."
 
 def call_gemini_api(api_key: str, content_to_review: str, rubric: str) -> str:
-    # Endpoint de Gemini API (Gemini 1.5 Flash o Gemini 2.0 Flash)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    # Modelos candidatos a probar en orden de preferencia
+    models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash", "gemini-1.5-pro"]
     
     prompt_user = f"""
  RÚBRICA Y CONTEXTO DEL CURSO:
@@ -64,25 +64,31 @@ Por favor genera la evaluación detallada según las instrucciones del sistema.
     
     headers = {'Content-Type': 'application/json'}
     data = json.dumps(payload).encode('utf-8')
-    req = urllib.request.Request(url, data=data, headers=headers, method='POST')
     
-    try:
-        with urllib.request.urlopen(req) as response:
-            res_body = response.read().decode('utf-8')
-            res_json = json.loads(res_body)
-            candidates = res_json.get('candidates', [])
-            if candidates:
-                parts = candidates[0].get('content', {}).get('parts', [])
-                if parts:
-                    return parts[0].get('text', '')
-            return "No se pudo obtener una respuesta válida del agente revisor."
-    except urllib.error.HTTPError as e:
-        err_msg = e.read().decode('utf-8')
-        print(f"HTTPError en Gemini API ({e.code}): {err_msg}", file=sys.stderr)
-        return f"Error en la consulta al Agente de IA (HTTP {e.code}). Verifique la API Key de Gemini."
-    except Exception as e:
-        print(f"Error general consultando Gemini API: {str(e)}", file=sys.stderr)
-        return f"Error al comunicar con la API de IA: {str(e)}"
+    last_error = ""
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        req = urllib.request.Request(url, data=data, headers=headers, method='POST')
+        
+        try:
+            print(f"Probando modelo {model}...")
+            with urllib.request.urlopen(req) as response:
+                res_body = response.read().decode('utf-8')
+                res_json = json.loads(res_body)
+                candidates = res_json.get('candidates', [])
+                if candidates:
+                    parts = candidates[0].get('content', {}).get('parts', [])
+                    if parts:
+                        return parts[0].get('text', '')
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode('utf-8', errors='ignore')
+            last_error = f"HTTP {e.code} en {model}: {err_body}"
+            print(f"Error con modelo {model}: {last_error}", file=sys.stderr)
+        except Exception as e:
+            last_error = f"Error general en {model}: {str(e)}"
+            print(last_error, file=sys.stderr)
+
+    return f"Error al consultar la API de Gemini. Detalle: {last_error}"
 
 def post_github_comment(github_token: str, repo: str, pr_number: str, comment_body: str):
     url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
